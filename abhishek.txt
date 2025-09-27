@@ -1,0 +1,191 @@
+# Step 1: Install dependencies
+!pip install gradio tensorflow
+
+# Step 2: Import libraries
+import os
+import numpy as np
+import gradio as gr
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.models import Sequential, load_model
+from tensorflow.keras.layers import Conv2D, MaxPooling2D, Flatten, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.preprocessing import image
+from PIL import Image
+
+# Step 3: Dataset paths
+train_dir = "/content/drive/MyDrive/splitted_data/train"
+val_dir   = "/content/drive/MyDrive/splitted_data/val"
+test_dir  = "/content/drive/MyDrive/splitted_data/test"
+
+IMG_SIZE = 224
+BATCH_SIZE = 32
+
+# Step 4: Data generators
+train_datagen = ImageDataGenerator(rescale=1./255)
+val_datagen   = ImageDataGenerator(rescale=1./255)
+test_datagen  = ImageDataGenerator(rescale=1./255)
+
+train_generator = train_datagen.flow_from_directory(
+    train_dir,
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode="categorical"
+)
+
+val_generator = val_datagen.flow_from_directory(
+    val_dir,
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode="categorical"
+)
+
+test_generator = test_datagen.flow_from_directory(
+    test_dir,
+    target_size=(IMG_SIZE, IMG_SIZE),
+    batch_size=BATCH_SIZE,
+    class_mode="categorical"
+)
+
+# Save class labels
+class_labels = list(train_generator.class_indices.keys())
+print("Class labels:", class_labels)
+
+# Step 5: Build CNN model
+model = Sequential([
+    Conv2D(32, (3,3), activation='relu', input_shape=(IMG_SIZE, IMG_SIZE, 3)),
+    MaxPooling2D(2,2),
+    Conv2D(64, (3,3), activation='relu'),
+    MaxPooling2D(2,2),
+    Flatten(),
+    Dense(128, activation='relu'),
+    Dropout(0.5),
+    Dense(len(class_labels), activation='softmax')
+])
+
+model.compile(optimizer=Adam(learning_rate=0.001),
+              loss="categorical_crossentropy",
+              metrics=["accuracy"])
+
+# Step 6: Train model
+history = model.fit(
+    train_generator,
+    validation_data=val_generator,
+    epochs=10
+)
+
+# Step 7: Save model
+model.save("retina_model.h5")
+print("✅ Model saved!")
+
+# Step 8: Load model
+model = load_model("retina_model.h5")
+
+# Step 9: Disease info (description + precaution)
+disease_info = {
+    "pterygium": {
+        "description": "A growth of tissue on the cornea that may cause discomfort or vision issues.",
+        "precaution": "Wear sunglasses outdoors, use lubricating eye drops, and avoid excessive sun exposure."
+    },
+    "CSCR": {
+        "description": "Central Serous Chorioretinopathy causes fluid buildup under the retina, leading to blurry vision.",
+        "precaution": "Reduce stress, limit corticosteroid use, and consult an ophthalmologist."
+    },
+    "glacoma": {
+        "description": "A group of eye diseases that damage the optic nerve, often linked to high eye pressure.",
+        "precaution": "Regular eye check-ups, prescribed eye drops, and timely surgery if required."
+    },
+    "ARMD": {
+        "description": "Age-Related Macular Degeneration leads to loss of central vision in older adults.",
+        "precaution": "Eat leafy greens, avoid smoking, and get regular retina scans."
+    },
+    "dibatic retenopathy": {
+        "description": "Diabetic Retinopathy damages blood vessels in the retina due to high blood sugar.",
+        "precaution": "Maintain blood sugar levels, regular eye exams, and follow diabetes care strictly."
+    },
+    "Edema": {
+        "description": "Macular Edema occurs when fluid accumulates in the retina causing swelling and vision distortion.",
+        "precaution": "Manage underlying conditions (diabetes, hypertension), and take prescribed injections/laser treatment."
+    },
+    "normal fundus": {
+        "description": "A healthy retina without signs of disease.",
+        "precaution": "Maintain a balanced diet, get yearly eye check-ups, and protect eyes from UV light."
+    },
+    "retinitis pigmentosa": {
+        "description": "A genetic disorder causing gradual loss of vision due to retinal degeneration.",
+        "precaution": "Use low-vision aids, protect eyes from bright light, and consider genetic counseling."
+    },
+    "Ocular": {
+        "description": "General ocular conditions affecting the eye that may not fit into specific categories but still impact vision.",
+        "precaution": "Consult an eye specialist for detailed examination, maintain eye hygiene, and avoid eye strain."
+    }
+}
+
+# Step 10: Prediction function
+def predict_safe(img):
+    if img is None:
+        return {"Error": 0.0}, "⚠️ No image uploaded."
+
+    if not isinstance(img, Image.Image):
+        img = Image.fromarray(img)
+
+    img = img.resize((IMG_SIZE, IMG_SIZE))
+    img_array = image.img_to_array(img) / 255.0
+    img_array = np.expand_dims(img_array, axis=0)
+
+    pred = model.predict(img_array)[0]
+    class_idx = np.argmax(pred)
+    class_name = class_labels[class_idx]
+    confidence = float(pred[class_idx]) * 100
+
+    desc = disease_info.get(class_name, {}).get("description", "No description available.")
+    precaution = disease_info.get(class_name, {}).get("precaution", "ℹ️ No precaution info available.")
+
+    info_text = f"### 🩺 Prediction: **{class_name} ({confidence:.2f}%)**\n\n" \
+                f"**Description:** {desc}\n\n" \
+                f"**Precaution:** {precaution}"
+
+    return {class_name: float(pred[class_idx])}, info_text
+
+# Step 11: Build reference guide
+def build_reference():
+    text = "## 📚 Retinal Disease Reference Guide\n\n"
+    for disease, details in disease_info.items():
+        text += f"### 🔹 {disease}\n"
+        text += f"- **Description:** {details['description']}\n"
+        text += f"- **Precaution:** {details['precaution']}\n\n"
+    return text
+
+reference_text = build_reference()
+
+# Step 12: Gradio UI
+with gr.Blocks(theme=gr.themes.Base(), css="""
+body {background: linear-gradient(to right, #e0f7fa, #ffe0f0);}
+h1 {font-family: 'Segoe UI', sans-serif; color: #6a1b9a; text-align:center;}
+p {font-family: 'Segoe UI', sans-serif; color:#333; font-size:16px; text-align:center;}
+.gr-box {border-radius: 12px; padding:20px; background-color:#f3e5f5; margin:10px;}
+.gr-button {background: linear-gradient(90deg,#8e2de2,#4a00e0); color:white; font-weight:bold;}
+.gr-image {border-radius: 20px; border: 2px solid #8e24aa;}
+""") as demo:
+
+    gr.Markdown("""
+    <h1>🧬 Eyes Disease Classifier</h1>
+    <p>Upload a retinal image to get AI-based predictions of common retinal diseases.</p>
+    """)
+
+    with gr.Row():
+        with gr.Column(scale=1):
+            gr.Markdown("<div class='gr-box'><h3>📤 Upload Eye Image</h3></div>")
+            image_input = gr.Image(type="pil", label="Upload Retinal Image", image_mode="RGB")
+            predict_btn = gr.Button("🔍 Predict", variant="primary")
+            gr.Markdown("<div class='gr-box'><h3>📊 Prediction Result</h3></div>")
+            output_label = gr.Label(num_top_classes=1, label="Prediction")
+            output_text = gr.Markdown("")
+        with gr.Column(scale=1):
+            gr.Markdown("<div class='gr-box'><h3>📚 Reference Guide</h3></div>")
+            gr.Markdown(reference_text)
+
+    predict_btn.click(fn=predict_safe, inputs=image_input, outputs=[output_label, output_text])
+
+# Step 13: Launch
+demo.launch(share=True)
